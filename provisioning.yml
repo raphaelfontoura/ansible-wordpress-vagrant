@@ -1,0 +1,135 @@
+---
+
+- hosts: wordpress
+  handlers:
+    - name: Restart apache
+      ansible.builtin.service:
+        name: apache2
+        state: restarted
+      become: yes
+  tasks:
+    - name: Install dependencies 
+      ansible.builtin.apt:
+        pkg:
+        - apache2
+        - ghostscript 
+        - libapache2-mod-php  
+        - php 
+        - php-bcmath 
+        - php-curl 
+        - php-imagick 
+        - php-intl 
+        - php-json 
+        - php-mbstring 
+        - php-mysql 
+        - php-xml 
+        - php-zip
+        state: latest
+        update_cache: yes
+      become: yes
+
+    - name: Create a directory www
+      ansible.builtin.file:
+        path: /srv/www
+        state: directory
+        owner: www-data
+        group: www-data
+      become: yes
+
+    - name: Download wordpress
+      ansible.builtin.unarchive:
+        src: https://wordpress.org/latest.tar.gz
+        dest: /srv/www
+        remote_src: true
+      become: yes
+
+    - name: Create wordpress.conf
+      ansible.builtin.copy:
+        src: files/wordpress.conf
+        dest: /etc/apache2/sites-available/000-default.conf
+      become: yes
+      notify: Restart apache
+
+    - name: Create wordpress database config
+      ansible.builtin.copy:
+        src: /srv/www/wordpress/wp-config-sample.php
+        dest: /srv/www/wordpress/wp-config.php
+        remote_src: yes
+        force: no
+      become: yes
+      notify: Restart apache
+
+    - name: Configure wp-config with database
+      ansible.builtin.replace:
+        path: /srv/www/wordpress/wp-config.php
+        regexp: '{{ item.regexp }}'
+        replace: '{{ item.replace }}'
+      with_items: 
+      - { regexp: 'database_name_here', replace: 'wordpress_db' }
+      - { regexp: 'username_here', replace: 'wordpress_user' }
+      - { regexp: 'password_here', replace: '12345' }
+      - { regexp: 'localhost', replace: '192.168.56.20' }
+      become: yes
+
+    - name: Configure file to avoid “known secrets” attacks
+      ansible.builtin.lineinfile:
+        path: /srv/www/wordpress/wp-config.php
+        search_string: "{{ item.search_string }}"
+        line: "{{ item.line }}"
+      with_items:
+      - { search_string: "define( 'AUTH_KEY',         'put your unique phrase here' );", line: "define('AUTH_KEY',         ' )}&zSW0yzto|?Y<9MnwJUw!BC)9=&,Z4 PAqL-|3B`%e-6)X,j.sGtdIpws,ZLg');"}
+      - { search_string: "define( 'SECURE_AUTH_KEY',  'put your unique phrase here' );", line: "define('SECURE_AUTH_KEY',  '~IV5,$~x=l+<3UrF}SrIABNx*j6Bo%;+FeeKYiw7grtqL>C!^:2!|T)z}BP}f<Y8');"}  
+      - { search_string: "define( 'LOGGED_IN_KEY',    'put your unique phrase here' );", line: "define('LOGGED_IN_KEY',    'dvgb&~O5lX#JdV-rNZBF]q9A|J|yL^~[:TN8MAe+!6-x7*o*t|#:s7|dxPL%<dMA');"}  
+      - { search_string: "define( 'NONCE_KEY',        'put your unique phrase here' );", line: "define('NONCE_KEY',        'P,@+ KX]Z]5,)d/oe^vZqM<2={e#24 vL+Huvl^1&M|WSjJr7P-1[PXbS9(5XI-E');"}  
+      - { search_string: "define( 'AUTH_SALT',        'put your unique phrase here' );", line: "define('AUTH_SALT',        '$kg8:owi0Q4iA7)-/&xSTLwHNlDBv-`983V-R~ipSsXK3}|[[4iX(*oD+Nm]H]Lq');"}  
+      - { search_string: "define( 'SECURE_AUTH_SALT', 'put your unique phrase here' );", line: "define('SECURE_AUTH_SALT', 'lPpn+@p $Lt:`+ vI@<?gjD%fN*IPx6^IB?c7(|+FHK]Cu[h,!K5UY#2OVoIe+Rr');"}  
+      - { search_string: "define( 'LOGGED_IN_SALT',   'put your unique phrase here' );", line: "define('LOGGED_IN_SALT',   'sDB~Z,DUK?>|2PO2y>_Akn0~NdU6z4]:mq[>-$N&Ow<-m}S`1}?-F/c9$17cHh75');"}  
+      - { search_string: "define( 'NONCE_SALT',       'put your unique phrase here' );", line: "define('NONCE_SALT',       ';g-+XQvqRgxyA{~ Lp5aG{=^T66x3UBRy;^AJ4`S4(4U~]<w{k~OliUb-(2HZqIK');"}
+      become: yes
+
+- hosts: mariadb
+  tasks:
+    - name: Install dependencies 
+      ansible.builtin.apt:
+        pkg:
+        - mariadb-server 
+        - python3-pymysql
+        state: latest
+        update_cache: yes
+      become: yes
+
+    - name: Create a new database with name 'wordpress_db'
+      community.mysql.mysql_db:
+        name: wordpress_db
+        state: present
+        login_unix_socket: /run/mysqld/mysqld.sock
+      become: yes
+
+    - name: Create database user with name 'wordpress_user' and password '12345' with privileges
+      community.mysql.mysql_user:
+        name: wordpress_user
+        password: 12345
+        priv: 'wordpress_db.*:SELECT,INSERT,UPDATE,DELETE,CREATE,DROP,ALTER'
+        state: present
+        login_unix_socket: /run/mysqld/mysqld.sock
+        host: '{{ item }}'
+      with_items:
+      - 'localhost'
+      - '127.0.0.1'
+      - '192.168.56.10'
+      become: yes
+
+    - name: Configure mariadb to allow remote connection
+      ansible.builtin.replace:
+        path: /etc/mysql/mariadb.conf.d/50-server.cnf
+        regexp: '127.0.0.1'
+        replace: '0.0.0.0'
+      become: yes
+      notify: Restart mariadb
+
+  handlers:
+    - name: Restart mariadb
+      ansible.builtin.service:
+        name: mariadb
+        state: restarted
+      become: yes

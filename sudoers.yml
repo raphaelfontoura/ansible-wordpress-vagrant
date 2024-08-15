@@ -1,0 +1,6 @@
+---
+- hosts: all
+  tasks:
+    - shell:  'echo "{{ansible_user}} ALL=(ALL) NOPASSWD: ALL" > etc/sudoers.d/{{ansible_user}}'
+      become: yes
+  
